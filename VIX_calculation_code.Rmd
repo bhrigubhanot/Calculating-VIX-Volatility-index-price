@@ -1,0 +1,312 @@
+---
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+##Complex Financial Instruments
+##CASE STUDY
+
+##Synopsis
+Pricing options requires good estimates of expected volatility. Since 2004 traders can directly get an exposure to volatility by trading futures on so called volatility indices. As we will see in Lecture 8, volatility indices reflect the expected variance (under the risk-neutral measure). In this case-study we will investigate how to compute volatility indices, properties of volatility, and how to price derivatives on volatility.
+
+##Objectives
+The goal of this case study is to learn how volatility indices are computed and how volatility indices differ to common stocks or stock-indices as an underlying when pricing derivatives.
+
+##Computations:
+
+```{r}
+setwd("C:\\Users\\user\\Desktop\\CourseWork\\Complex Financial Instruments")
+
+#Load the required libraries
+library(reshape2)
+library(ggplot2)
+library(plyr)
+source("case study function.R")
+```
+
+
+```{r}
+sp500_options_2010=read.csv("sp500_options_2010.csv",header=T)
+sp500_options_2010[,"MID"]=(sp500_options_2010[,"BID_PRICE"]+sp500_options_2010[,"ASK_PRICE"])/2
+sp500_options_2010[,"STRIKEPRICE"]=sp500_options_2010[,'STRIKEPRICE']/1000
+drop=c("UNDERLYING","IMPL_VOLATILITY","DELTA","GAMMA","VEGA","THETA")
+sp500_options_2010=sp500_options_2010[,!(names(sp500_options_2010) %in% drop)]
+head(sp500_options_2010)
+in_r=0
+in_date_start="2010-01-14"
+in_MATURITYDATE=20100417
+```
+
+##calculating days to expiry
+
+```{r}
+sp500_options_2010[,"MATURITYDATE"]=as.numeric(sp500_options_2010[,"MATURITYDATE"])
+sp500_options_2010[,"date_start"]=as.Date(sp500_options_2010[,"Time"],format="%e-%b-%y")
+sp500_options_2010[,"date_end"]=as.Date(as.character(sp500_options_2010[,"MATURITYDATE"]),format="%Y%m%d")
+sp500_options_2010[,"days_to_expiry"]=sp500_options_2010[,"date_end"]-sp500_options_2010[,"date_start"]
+sp500_options_2010[,"days_to_expiry"]=as.numeric(sp500_options_2010[,"days_to_expiry"])
+```
+
+
+##Example option selection:All options on one date for 1 maturity
+
+```{r}
+data=subset(sp500_options_2010,MATURITYDATE==in_MATURITYDATE & date_start==as.Date(in_date_start))
+ggplot(data,aes(x=STRIKEPRICE,y=BID_PRICE)) + geom_line(aes(color=OPTIONTYPE))+theme_classic()
+```
+
+##Finding forward price and K0
+
+```{r}
+atm_strikes=sp500_options_2010[,c("date_start","MATURITYDATE","days_to_expiry","OPTIONTYPE","STRIKEPRICE","MID")]
+atm_strikes=dcast(atm_strikes,formula=date_start+MATURITYDATE+days_to_expiry+STRIKEPRICE~OPTIONTYPE,value.var = "MID")
+
+atm_strikes[,"CmP"]=atm_strikes[,"C"]-atm_strikes[,"P"]
+forwards=get_forwards(atm_strikes,in_r)
+head(forwards[,-(5:6)])
+
+kzero=get_kzero(forwards)
+
+head(kzero[,-(5:7)])
+
+sp500_options_2010=merge(sp500_options_2010,kzero[,c("date_start","MATURITYDATE","Forward","KZERO")],by=c("date_start","MATURITYDATE"))
+
+head(sp500_options_2010)
+```
+
+##example option selection: indicating where to choose put and call options
+
+```{r}
+data=subset(sp500_options_2010,MATURITYDATE==in_MATURITYDATE & date_start==as.Date(in_date_start))
+kzero=data[1,"KZERO"]
+
+ggplot(data,aes(x=STRIKEPRICE,y=BID_PRICE))+geom_line(aes(color=OPTIONTYPE))+geom_point(aes(color=OPTIONTYPE))+geom_vline(xintercept=kzero)+annotate("text",x=kzero-100,y=300,label="P")+annotate("text",x=kzero+100,y=300,label="C")+theme_classic()
+```
+
+
+##example option selection: only using OTM options
+
+```{r}
+vix_options=subset(sp500_options_2010,(sp500_options_2010[,"OPTIONTYPE"]=="C" & STRIKEPRICE > KZERO)|(sp500_options_2010[,"OPTIONTYPE"]=="P" & STRIKEPRICE < KZERO))
+
+data=subset(vix_options,MATURITYDATE==in_MATURITYDATE & date_start==as.Date(in_date_start))
+
+kzero=data[1,"KZERO"]
+
+ggplot(data,aes(x=STRIKEPRICE,y=BID_PRICE))+geom_line(aes(color=OPTIONTYPE))+geom_point(aes(color=OPTIONTYPE))+geom_vline(xintercept=kzero)+annotate("text",x=kzero-100,y=300,label="P")+annotate("text",x=kzero+100,y=300,label="C")+ylim(0,1)+theme_classic()
+```
+
+
+##Finding two consecutive zero bid prices
+
+```{r}
+
+doublezerobids=get_doublezerobids(vix_options)
+
+vix_options=merge(vix_options,doublezerobids,by=c("Time","OPTIONTYPE","days_to_expiry"),all.x=T)
+```
+
+##Example option selection:indicating minimum and maximum strike prices
+
+```{r}
+data=subset(vix_options,MATURITYDATE==in_MATURITYDATE & date_start==as.Date(in_date_start))
+
+calls=subset(data,OPTIONTYPE=="C")
+puts=subset(data,OPTIONTYPE=="P")
+
+kzero=data[1,"KZERO"]
+calls=subset(data,OPTIONTYPE=="C")
+kmin=calls[1,"min_k"]
+puts=subset(data,OPTIONTYPE=="P")
+kmax=puts[1,"max_k"]
+
+ggplot(data,aes(x=STRIKEPRICE,y=BID_PRICE))+geom_line(aes(color=OPTIONTYPE))+geom_point(aes(color=OPTIONTYPE))+geom_vline(xintercept=kzero)+geom_vline(xintercept=kmax)+geom_vline(xintercept=kmin)+annotate("text",x=kzero-100,y=300,label="P")+annotate("text",x=kzero+100,y=300,label="C")+ylim(0,30)+theme_classic()
+```
+
+
+```{r}
+vix_options=subset(vix_options,(OPTIONTYPE=="P"&STRIKEPRICE>max_k)|(OPTIONTYPE=="C"&STRIKEPRICE<min_k))
+vix_options=subset(vix_options,BID_PRICE>0)
+```
+
+##Example option selection:final optoins used for calculating variance swap on given date and maurity
+
+```{r}
+data=subset(vix_options,MATURITYDATE==in_MATURITYDATE & date_start==as.Date(in_date_start))
+kzero=data[1,"KZERO"]
+calls=subset(data,OPTIONTYPE=="C")
+kmin=calls[1,"min_k"]
+puts=subset(data,OPTIONTYPE=="P")
+kmax=puts[1,"max_k"]
+
+ggplot(data,aes(x=STRIKEPRICE,y=BID_PRICE))+geom_line(aes(color=OPTIONTYPE))+geom_point(aes(color=OPTIONTYPE))+geom_vline(xintercept=kzero)+geom_vline(xintercept=kmax)+geom_vline(xintercept=kmin)+annotate("text",x=kzero-100,y=300,label="P")+annotate("text",x=kzero+100,y=300,label="C")+ylim(0,30)+theme_classic()
+```
+
+```{r}
+vix_atm_options=subset(sp500_options_2010,STRIKEPRICE==KZERO)
+vix_options=vix_options[,!(names(vix_options)%in%c("min_k","max_k"))]
+vix_options=rbind(vix_atm_options,vix_options)
+
+vix_options=vix_options[order(vix_options[,"date_start"],vix_options[,"MATURITYDATE"],vix_options[,"STRIKEPRICE"]),]
+```
+
+```{r}
+vix_options=get_previousstrike(vix_options)
+
+variance_swap=ddply(vix_options,.(date_start,MATURITYDATE,days_to_expiry),function(x){
+  T=x[1,"days_to_expiry"]/365
+  F=x[1,"Forward"]
+  K=x[1,"KZERO"]
+  x[,"Delta"]=(x[,"STRIKEPRICE"]-x[,"LAST_STRIKEPRICE"])/(x[,"STRIKEPRICE"]^2)
+  sum_otm=sum(x[,"Delta"]*x["MID"],na.rm=T)
+  price=(2/T)*exp(in_r*T)*sum_otm-(1/T)*((F/K-1)^2)
+  return(price)
+})
+```
+
+```{r}
+vix_prices=variance_swap
+vix_prices[,"V1"]=sqrt(vix_prices[,"V1"])
+ggplot(subset(vix_prices,days_to_expiry<20),aes(x=date_start,y=V1))+geom_line(aes(color=as.factor(days_to_expiry)))
+```
+
+##code to find the 30 days VIX value 
+
+```{r}
+ttable=vix_prices
+my_vix_30=ddply(ttable,.(date_start),function(x){
+
+test_start_date <- x[1,"date_start"]  #extract the date from vix data using ddply
+
+
+x[,"N1_N2"]=abs(x[,"days_to_expiry"]-30)  
+x <- x[order(x[,"N1_N2"]),]       #arranging the table with the closest terms to 30 days expiries  
+
+ near_term<-x[1,"days_to_expiry"]
+Nt1<-abs(near_term)
+T1<-x[1,"days_to_expiry"]/365
+sigma1<-x[1,"V1"]
+
+next_term<-x[2,"days_to_expiry"]
+Nt2<-abs(next_term)
+T2<-x[2,"days_to_expiry"]/365
+sigma2<-x[2,"V1"]
+
+
+N30<-30
+
+N365<-365
+   prod1<-T1*(sigma1^2)*((Nt2-N30)/(Nt2-Nt1))
+  
+  prod2<-T2*(sigma2^2)*((N30-Nt1)/(Nt2-Nt1))
+  result<<-prod1+prod2
+
+myyvix<-100*sqrt((result*365)/N30)
+return(myyvix)  
+})
+
+```
+
+
+##code to find the 90 days VIX value
+
+```{r}
+ttable=vix_prices
+ttable=na.omit(ttable)
+
+my_vix_90=ddply(ttable,.(date_start),function(x){
+
+
+x[,"N1_N2"]=abs(x[,"days_to_expiry"]-90)  
+x <- x[order(x[,"N1_N2"]),]  
+
+
+ near_term<-x[1,"days_to_expiry"]
+Nt1<-abs(near_term)
+T1<-x[1,"days_to_expiry"]/365
+sigma1<-x[1,"V1"]
+
+next_term<-x[2,"days_to_expiry"]
+Nt2<-abs(next_term)
+T2<-x[2,"days_to_expiry"]/365
+sigma2<-x[2,"V1"]
+
+
+N90<-90
+
+N365<-365
+  x<-sigma1^2
+  prod1<-T1*(sigma1^2)*((Nt2-N90)/(Nt2-Nt1))
+  
+  prod2<-T2*(sigma2^2)*((N90-Nt1)/(Nt2-Nt1))
+  result<<-prod1+prod2
+
+myyvix<-100*sqrt((result*365)/N90)
+return(myyvix)  
+})
+
+write.table(my_vix_90, "C:\\Users\\user\\Documents\\mydata.txt", sep="\t")
+
+```
+
+
+Appendix
+
+#get_forwards
+get_forwards=function(options,interest_rate)
+{
+  forwards=ddply(options,.(date_start,MATURITYDATE),function(x){
+    
+    
+    
+    x[which.min(abs(x[,"CmP"])),]
+  })
+  forwards[,"Forward"]=forwards[,"STRIKEPRICE"]+exp(interest_rate*forwards[,"days_to_expiry"]/365)*forwards[,"CmP"]
+  forwards=forwards[,c("date_start","MATURITYDATE","Forward")]
+  options=merge(options,forwards[,c("date_start","MATURITYDATE","Forward")],by=c("date_start","MATURITYDATE"))
+  return(options)
+}
+
+#get_kzero
+
+get_kzero=function(options)
+  {
+    atm_strikes=subset(options,Forward>=STRIKEPRICE)
+    atm_strikes[,"KmF"]=round((atm_strikes[,"Forward"]-atm_strikes[,"STRIKEPRICE"]),2)
+    kzero=ddply(atm_strikes,.(date_start,MATURITYDATE),function(x){x[which.min(x[,"KmF"]),]
+    })
+    kzero[,"KZERO"]=kzero[,"STRIKEPRICE"]
+    return(kzero)
+  }
+
+#get_doublezerobids
+
+get_doublezerobids=function(options){
+    options=.add_lagged_column(options,column_name="BID_PRICE",orderby="STRIKEPRICE")
+    zero_bids=options[,c("Time","OPTIONTYPE","days_to_expiry","STRIKEPRICE","BID_PRICE","LAST_BID_PRICE")]
+    zero_bids=subset(zero_bids,BID_PRICE==0 & LAST_BID_PRICE==0)
+    zero_bids=ddply(zero_bids,.(Time,OPTIONTYPE,days_to_expiry),summarize,min_k=min(STRIKEPRICE),max_k=max(STRIKEPRICE))
+    return(zero_bids)
+}
+
+#get_previousstrike
+
+get_previousstrike=function(options){
+    options=.add_lagged_column(options,column_name="STRIKEPRICE",orderby="STRIKEPRICE")
+    return(options)
+}
+
+#  .add_lagged_column
+
+.add_lagged_column=function(data,column_name,orderby){
+     data=ddply(data,.(Time,days_to_expiry),function(x){
+         x=x[order(x[,orderby]),]
+         n=length(row.names(x))
+         x[,paste("LAST_",column_name,sep = "")]=c(NA,x[1:(n-1),column_name])
+         return(x)
+     })
+     return(data)
+}
+
+
